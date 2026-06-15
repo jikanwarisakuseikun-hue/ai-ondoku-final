@@ -35,12 +35,8 @@ with col2:
 with col3:
     student_name = st.text_input("氏名：", placeholder="例: 田中太郎")
 
-# ==========================================================
-# 🌟 【自由入力エリア】生徒にその場で入力させる設定
-# ==========================================================
 unit_name = st.text_input("学習する単元（今日練習する場所）：", placeholder="例: U1 Part1")
 reference_text = st.text_input("練習する英文（教科書の英語を入力してね）：", placeholder="例: Welcome to our school.")
-# ==========================================================
 
 st.markdown("---")
 st.subheader("🎤 録音スタート")
@@ -107,12 +103,15 @@ if audio_value:
                             robot_email = st.secrets["ROBOT_EMAIL"]
                             client_id = st.secrets["ROBOT_CLIENT_ID"]
                             
+                            # 余計な加工をせず、金庫（Secrets）に貼られた文字列をそのままピュアにGoogleに渡します
+                            formatted_private_key = st.secrets["ROBOT_PRIVATE_KEY"]
+                            
                             info = {
                                 "type": "service_account",
                                 "client_email": robot_email,
                                 "client_id": client_id,
-                                "private_key_id": "dummy",
-                                "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC3v\n-----END PRIVATE KEY-----\n",
+                                "private_key_id": "google_cloud_key",
+                                "private_key": formatted_private_key,
                                 "token_uri": "https://oauth2.googleapis.com/token"
                             }
                             
