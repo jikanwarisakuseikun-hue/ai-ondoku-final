@@ -35,8 +35,12 @@ with col2:
 with col3:
     student_name = st.text_input("氏名：", placeholder="例: 田中太郎")
 
-unit_name = st.selectbox("学習する単元：", ["U1 Part1", "U1 Part2", "U2 Part1", "U2 Part2", "その他"])
-reference_text = st.text_input("練習する英文：", "Welcome to our school. Let's study English together.")
+# ==========================================================
+# 🌟 【自由入力エリア】生徒にその場で入力させる設定
+# ==========================================================
+unit_name = st.text_input("学習する単元（今日練習する場所）：", placeholder="例: U1 Part1")
+reference_text = st.text_input("練習する英文（教科書の英語を入力してね）：", placeholder="例: Welcome to our school.")
+# ==========================================================
 
 st.markdown("---")
 st.subheader("🎤 録音スタート")
@@ -94,8 +98,8 @@ if audio_value:
             st.markdown("---")
             st.subheader("📮 先生への自動提出")
             
-            if not (class_name and student_num and student_name):
-                st.warning("⚠️ 提出するには、上部のクラス・出席番号・氏名を入力してください。")
+            if not (class_name and student_num and student_name and unit_name and reference_text):
+                st.warning("⚠️ 提出するには、クラス・出席番号・氏名・単元・英文をすべて入力してください。")
             else:
                 if st.button("📤 この結果と音声を先生に提出する", type="primary"):
                     with st.spinner("先生のGoogle Driveへ送信中... 🚀"):
