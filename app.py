@@ -104,7 +104,6 @@ if audio_value:
                             client_id = st.secrets["ROBOT_CLIENT_ID"]
                             formatted_private_key = st.secrets["ROBOT_PRIVATE_KEY"]
                             
-                            # 🌟 ここで新しいプロジェクトID「ai-ondoku-final-go」を絶対に使うように強制ロックしました！
                             info = {
                                 "type": "service_account",
                                 "project_id": "ai-ondoku-final-go",
@@ -137,7 +136,14 @@ if audio_value:
                                 'description': f"総合点:{final_score}, 正確さ:{score_acc}, 流暢さ:{score_flu}, 抑揚:{score_pros}, 完成度:{score_comp}"
                             }
                             media = MediaIoBaseUpload(io.BytesIO(audio_bytes), mimetype='audio/wav')
-                            uploaded_file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                            
+                            # 🌟 ロボット自身の容量ではなく、先生の共有フォルダの容量を使う設定（supportsAllDrives=True）を追加しました！
+                            uploaded_file = drive_service.files().create(
+                                body=file_metadata, 
+                                media_body=media, 
+                                fields='id',
+                                supportsAllDrives=True
+                            ).execute()
                             file_id = uploaded_file.get('id')
                             
                             audio_link = f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk"
