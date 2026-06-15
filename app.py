@@ -102,17 +102,19 @@ if audio_value:
                         try:
                             robot_email = st.secrets["ROBOT_EMAIL"]
                             client_id = st.secrets["ROBOT_CLIENT_ID"]
-                            
-                            # 金庫に保存された鍵の文字列を、余計な加工をせずにそのままピュアにGoogleに渡します
                             formatted_private_key = st.secrets["ROBOT_PRIVATE_KEY"]
                             
+                            # 🌟 ここで新しいプロジェクトID「ai-ondoku-final-go」を絶対に使うように強制ロックしました！
                             info = {
                                 "type": "service_account",
-                                "client_email": robot_email,
-                                "client_id": client_id,
+                                "project_id": "ai-ondoku-final-go",
                                 "private_key_id": "google_cloud_key",
                                 "private_key": formatted_private_key,
-                                "token_uri": "https://oauth2.googleapis.com/token"
+                                "client_email": robot_email,
+                                "client_id": client_id,
+                                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                                "token_uri": "https://oauth2.googleapis.com/token",
+                                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs"
                             }
                             
                             creds = service_account.Credentials.from_service_account_info(
