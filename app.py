@@ -103,7 +103,7 @@ if audio_value:
                             robot_email = st.secrets["ROBOT_EMAIL"]
                             client_id = st.secrets["ROBOT_CLIENT_ID"]
                             
-                            # 余計な加工をせず、金庫（Secrets）に貼られた文字列をそのままピュアにGoogleに渡します
+                            # 金庫に保存された鍵の文字列を、余計な加工をせずにそのままピュアにGoogleに渡します
                             formatted_private_key = st.secrets["ROBOT_PRIVATE_KEY"]
                             
                             info = {
