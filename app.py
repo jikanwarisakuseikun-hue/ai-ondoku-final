@@ -33,7 +33,7 @@ with col1:
 with col2:
     student_num = st.text_input("出席番号：", placeholder="例: 05")
 with col3:
-    student_name = st.text_input("氏名：", placeholder="例: 田中太郎")
+    student_name = st.text_input("イニシャル：", placeholder="例: TS")
 
 unit_name = st.text_input("学習する単元（今日練習する場所）：", placeholder="例: U1 Part1")
 reference_text = st.text_input("練習する英文（教科書の英語を入力してね）：", placeholder="例: Welcome to our school.")
