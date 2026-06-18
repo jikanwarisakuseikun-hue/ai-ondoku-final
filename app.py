@@ -1,189 +1,164 @@
 import streamlit as st
 import azure.cognitiveservices.speech as speechsdk
-import os
-import io
-from datetime import datetime, timedelta
-from google.oauth2 import service_account
+import gspread
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-import pandas as pd
+from googleapiclient.http import MediaFileUpload
+import os
+import datetime
 
-st.set_page_config(page_title="AI音読アドバイザー Max Pro", layout="centered")
-st.title("🗣️ AI音読システム（成績表＆音声自動提出）")
-st.write("録音して点数を確認したら、「先生に提出する」ボタンを押してください。")
+# --- 1. 画面の初期設定 ---
+st.set_page_config(page_title="AI音読アドバイザー", layout="centered")
+st.title("🗣️ AI音読アドバイザー")
+st.write("英文を読んで、マイクで録音して提出しよう！")
 
-# --- 1. アカウント＆負荷分散スイッチ ---
-attendance_type = st.radio(
-    "あなたの 出席番号（または班） を選んでください：",
-    ["奇数番号 (1, 3, 5...)", "偶数番号 (2, 4, 6...)"],
-    horizontal=True
-)
+# --- 2. 金庫（Secrets）から秘密の鍵を読み込む ---
+try:
+    AZURE_KEY_KISU = st.secrets["KEY_KISU"]
+    AZURE_KEY_GUSU = st.secrets["KEY_GUSU"]
+    AZURE_REGION = st.secrets["AZURE_REGION"]
+    GOOGLE_DRIVE_FOLDER_ID = st.secrets["GOOGLE_DRIVE_FOLDER_ID"]
+    GOOGLE_SHEET_ID = st.secrets["GOOGLE_SHEET_ID"]
+    
+    # Google認証情報の組み立て
+    google_info = {
+        "type": "service_account",
+        "project_id": "ai-ondoku-final-go",
+        "private_key_id": "dummy_id",
+        "private_key": st.secrets["ROBOT_PRIVATE_KEY"],
+        "client_email": st.secrets["ROBOT_EMAIL"],
+        "client_id": st.secrets["ROBOT_CLIENT_ID"],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{st.secrets['ROBOT_EMAIL']}"
+    }
+    scopes = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    creds = Credentials.from_service_account_info(google_info, scopes=scopes)
+except Exception as e:
+    st.error("🔑 金庫（Secrets）の設定が正しくありません。設定を確認してください。")
+    st.stop()
 
-if "奇数" in attendance_type:
-    azure_key = st.secrets["KEY_KISU"]
-else:
-    azure_key = st.secrets["KEY_GUSU"]
-
-azure_region = st.secrets["AZURE_REGION"]
-
-# --- 2. 生徒の個人情報入力 ---
-col1, col2, col3 = st.columns(3)
+# --- 3. 生徒の入力フォーム ---
+st.subheader("📝 じょうほうを入力しよう")
+col1, col2 = st.columns(2)
 with col1:
-    class_name = st.text_input("クラス：", placeholder="例: 1組")
+    class_name = st.selectbox("クラス", ["1年1組", "1年2組", "1年3組"])
 with col2:
-    student_num = st.text_input("出席番号：", placeholder="例: 05")
-with col3:
-    student_name = st.text_input("イニシャル：", placeholder="例: TS")
+    student_num = st.number_input("しゅっせきばんごう", min_value=1, max_value=40, value=1)
 
-unit_name = st.text_input("学習する単元（今日練習する場所）：", placeholder="例: U1 Part1")
-reference_text = st.text_input("練習する英文（教科書の英語を入力してね）：", placeholder="例: Welcome to our school.")
+student_name = st.text_input("名前（ニックネームでもOK）")
+unit_name = st.text_input("練習する単元（例: Unit 1）")
+text_to_read = st.text_area("読む英文", "This is a pen.")
 
-st.markdown("---")
-st.subheader("🎤 録音スタート")
-audio_value = st.audio_input("マイクボタンを押して英語を読んでね")
+# --- 4. 録音とAI採点（セッション記憶対応） ---
+st.subheader("🎙️ 録音して採点する")
+audio_value = st.audio_input("マイクボタンを押して発音してね")
+
+# 点数を一時保存する「記憶の部屋」を準備
+if "saved_scores" not in st.session_state:
+    st.session_state.saved_scores = None
 
 if audio_value:
-    st.info("AIが発音を多角的に分析中... 🤖")
-    
-    audio_bytes = audio_value.read()
-    with open("temp_audio.wav", "wb") as f:
-        f.write(audio_bytes)
+    # まだ採点データがない場合だけAzureを呼び出す
+    if st.session_state.saved_scores is None:
+        st.info("🤖 AIがあなたの発音を分析中...")
         
-    try:
-        speech_config = speechsdk.SpeechConfig(subscription=azure_key, region=azure_region)
+        # 音声ファイルを一時保存
+        with open("temp_audio.wav", "wb") as f:
+            f.write(audio_value.read())
+            
+        # 出席番号によるAzureキーの分散処理
+        azure_key = AZURE_KEY_GUSU if student_num % 2 == 0 else AZURE_KEY_KISU
+        speech_config = speechsdk.SpeechConfig(subscription=azure_key, region=AZURE_REGION)
         audio_config = speechsdk.audio.AudioConfig(filename="temp_audio.wav")
         
-        pronunciation_config = speechsdk.PronunciationAssessmentConfig(
-            json_string=f'{{"referenceText":"{reference_text}","gradingSystem":"HundredMark","granularity":"Word","phonemeAlphabet":"IPA"}}'
+        # 発音評価の設定
+        pron_config = speechsdk.PronunciationAssessmentConfig(
+            reference_text=text_to_read,
+            grading_system=speechsdk.PronunciationAssessmentGradingSystem.HundredMark,
+            granularity=speechsdk.PronunciationAssessmentGranularity.Phoneme,
+            enable_miscue=True
         )
-        pronunciation_config.enable_prosody_assessment()
         
         speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
-        pronunciation_config.apply_to(speech_recognizer)
-        result = speech_recognizer.recognize_once_async().get()
+        pron_config.apply_to(speech_recognizer)
+        result = speech_recognizer.recognize_once()
         
         if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            pron_result = speechsdk.PronunciationAssessmentResult(result)
+            pron_result = speechsdk.PronunciationAssessmentResult.from_result(result)
             
-            score_acc = int(pron_result.accuracy_score)
-            score_flu = int(pron_result.fluency_score)
-            score_comp = int(pron_result.completeness_score)
-            score_pros = int(pron_result.prosody_score) if hasattr(pron_result, 'prosody_score') else 85
-            
-            final_score = int((score_acc + score_flu + score_pros + score_comp) / 4)
-            
-            st.success(f"🎉 総合スコア: {final_score} 点 / 100点")
-            
-            st.markdown("### 📈 あなたの発音ステータス（観点別）")
-            chart_data = pd.DataFrame({
-                "観点": ["正確さ(音)", "流暢さ(スピード)", "抑揚(リズム)", "完成度(読み飛ばし)"],
-                "スコア": [score_acc, score_flu, score_pros, score_comp]
-            })
-            st.bar_chart(chart_data.set_index("観点"))
-            
-            colored_words = []
-            for word in pron_result.words:
-                if word.error_type == "None":
-                    colored_words.append(f":green[{word.word}]")
-                elif word.error_type == "Mispronunciation":
-                    colored_words.append(f":red[{word.word}]")
-                elif word.error_type == "Omission":
-                    colored_words.append(f"~~{word.word}~~")
-            st.subheader(" ".join(colored_words))
-            
-            st.markdown("---")
-            st.subheader("📮 先生への自動提出")
-            
-            if not (class_name and student_num and student_name and unit_name and reference_text):
-                st.warning("⚠️ 提出するには、クラス・出席番号・氏名・単元・英文をすべて入力してください。")
-            else:
-                if st.button("📤 この結果と音声を先生に提出する", type="primary"):
-                    with st.spinner("先生のGoogle Driveへ送信中... 🚀"):
-                        try:
-                            robot_email = st.secrets["ROBOT_EMAIL"]
-                            client_id = st.secrets["ROBOT_CLIENT_ID"]
-                            formatted_private_key = st.secrets["ROBOT_PRIVATE_KEY"]
-                            
-                            info = {
-                                "type": "service_account",
-                                "project_id": "ai-ondoku-final-go",
-                                "private_key_id": "google_cloud_key",
-                                "private_key": formatted_private_key,
-                                "client_email": robot_email,
-                                "client_id": client_id,
-                                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                                "token_uri": "https://oauth2.googleapis.com/token",
-                                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs"
-                            }
-                            
-                            creds = service_account.Credentials.from_service_account_info(
-                                info, 
-                                scopes=[
-                                    "https://www.googleapis.com/auth/drive.file",
-                                    "https://www.googleapis.com/auth/spreadsheets"
-                                ]
-                            )
-                            drive_service = build('drive', 'v3', credentials=creds)
-                            sheets_service = build('sheets', 'v4', credentials=creds)
-                            
-                            folder_id = st.secrets["GOOGLE_DRIVE_FOLDER_ID"]
-                            spreadsheet_id = st.secrets["GOOGLE_SHEET_ID"]
-                            
-                            filename = f"{class_name}_{student_num}番_{student_name}_{unit_name}_{final_score}点.wav"
-                            file_metadata = {
-                                'name': filename,
-                                'parents': [folder_id],
-                                'description': f"総合点:{final_score}, 正確さ:{score_acc}, 流暢さ:{score_flu}, 抑揚:{score_pros}, 完成度:{score_comp}"
-                            }
-                            media = MediaIoBaseUpload(io.BytesIO(audio_bytes), mimetype='audio/wav')
-                            
-                            # 🌟 ロボット自身の容量ではなく、先生の共有フォルダの容量を使う設定（supportsAllDrives=True）を追加しました！
-                            uploaded_file = drive_service.files().create(
-                                body=file_metadata, 
-                                media_body=media, 
-                                fields='id',
-                                supportsAllDrives=True
-                            ).execute()
-                            file_id = uploaded_file.get('id')
-                            
-                            audio_link = f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk"
-                            
-                            now_jst = datetime.utcnow() + timedelta(hours=9)
-                            timestamp = now_jst.strftime('%Y-%m-%d %H:%M:%S')
-                            
-                            row_data = [
-                                timestamp,
-                                class_name,
-                                student_num,
-                                student_name,
-                                unit_name,
-                                final_score,
-                                score_acc,
-                                score_flu,
-                                score_pros,
-                                score_comp,
-                                audio_link
-                            ]
-                            
-                            body = {'values': [row_data]}
-                            sheets_service.spreadsheets().values().append(
-                                spreadsheetId=spreadsheet_id,
-                                range="シート1!A:K",
-                                valueInputOption="USER_ENTERED",
-                                insertDataOption="INSERT_ROWS",
-                                body=body
-                            ).execute()
-                            
-                            st.balloons()
-                            st.success("🎉 提出が完了しました！")
-                            
-                        except Exception as google_error:
-                            st.error(f"❌ Googleシステムへの送信に失敗しました: {google_error}")
-            
-        else:
-            st.error("AIがうまく声を聴き取れませんでした。もう一度試してね。")
-    except Exception as e:
-        st.error(f"❌ エラーが発生しました: {e}")
-    finally:
-        if os.path.exists("temp_audio.wav"):
+            # 点数をセッション状態にガッチリ記憶
+            st.session_state.saved_scores = {
+                "total": round(pron_result.pronunciation_score),
+                "acc": round(pron_result.accuracy_score),
+                "flu": round(pron_result.fluency_score),
+                "pro": round(pron_result.prosody_score),
+                "comp": round(pron_result.completeness_score)
+            }
+
+    # 記憶された点数がある場合は画面に固定表示
+    if st.session_state.saved_scores:
+        scores = st.session_state.saved_scores
+        st.metric(label="総合点", value=f"{scores['total']} 点")
+        st.write(f"🎯 正確さ: {scores['acc']} | 🌊 流暢さ: {scores['flu']} | 🎵 抑揚: {scores['pro']} | 🏁 完成度: {scores['comp']}")
+        
+        # --- 5. 提出ボタン ---
+        if st.button("📤 先生に提出する", type="primary"):
+            st.info("🚀 安全に提出中...")
+            try:
+                now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                filename = f"{class_name}_{student_num}_{student_name}_{unit_name}.wav"
+                
+                # Googleドライブへアップロード（共有ドライブ対応）
+                drive_service = build('drive', 'v3', credentials=creds)
+                file_metadata = {
+                    'name': filename,
+                    'parents': [GOOGLE_DRIVE_FOLDER_ID]
+                }
+                
+                # ファイルが残っているか確認してアップロード
+                if os.path.exists("temp_audio.wav"):
+                    media = MediaFileUpload('temp_audio.wav', mimetype='audio/wav')
+                    uploaded_file = drive_service.files().create(
+                        body=file_metadata,
+                        media_body=media,
+                        fields='id, webViewLink',
+                        supportsAllDrives=True
+                    ).execute()
+                    audio_link = uploaded_file.get('webViewLink')
+                else:
+                    audio_link = "音声ファイル未検出"
+                
+                # Googleスプレッドシートへデータ書き込み
+                gc = gspread.authorize(creds)
+                sheet = gc.open_by_key(GOOGLE_SHEET_ID).sheet1
+                
+                new_row = [
+                    now, class_name, student_num, student_name, unit_name,
+                    scores['total'], scores['acc'], scores['flu'], scores['pro'], scores['comp'], audio_link
+                ]
+                sheet.append_row(new_row)
+                
+                # 成功パフォーマンス（風船！）
+                st.success("🎉 提出が完了しました！よくがんばったね！")
+                st.balloons()
+                
+                # 次の提出のために記憶をリセット
+                st.session_state.saved_scores = None
+                if os.path.exists("temp_audio.wav"):
+                    os.remove("temp_audio.wav")
+                
+            except Exception as e:
+                st.error(f"❌ 提出中にエラーが発生しました。先生に報告してください。\nエラー詳細: {e}")
+else:
+    # 新しい録音がまだない、またはクリアされたら記憶をリセット
+    st.session_state.saved_scores = None
+    if os.path.exists("temp_audio.wav"):
+        try:
             os.remove("temp_audio.wav")
+        except:
+            pass
